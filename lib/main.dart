@@ -1,15 +1,15 @@
 import 'package:flutter/material.dart';
-import 'package:ar_flutter_plugin/ar_flutter_plugin.dart';
-import 'package:ar_flutter_plugin/datatypes/config_planedetection.dart';
-import 'package:ar_flutter_plugin/datatypes/hittest_result_types.dart';
-import 'package:ar_flutter_plugin/datatypes/node_types.dart';
-import 'package:ar_flutter_plugin/managers/ar_anchor_manager.dart';
-import 'package:ar_flutter_plugin/managers/ar_location_manager.dart';
-import 'package:ar_flutter_plugin/managers/ar_object_manager.dart';
-import 'package:ar_flutter_plugin/managers/ar_session_manager.dart';
-import 'package:ar_flutter_plugin/models/ar_anchor.dart';
-import 'package:ar_flutter_plugin/models/ar_hittest_result.dart';
-import 'package:ar_flutter_plugin/models/ar_node.dart';
+import 'package:ar_flutter_plugin_2/ar_flutter_plugin.dart';
+import 'package:ar_flutter_plugin_2/datatypes/config_planedetection.dart';
+import 'package:ar_flutter_plugin_2/datatypes/hittest_result_types.dart';
+import 'package:ar_flutter_plugin_2/datatypes/node_types.dart';
+import 'package:ar_flutter_plugin_2/managers/ar_anchor_manager.dart';
+import 'package:ar_flutter_plugin_2/managers/ar_location_manager.dart';
+import 'package:ar_flutter_plugin_2/managers/ar_object_manager.dart';
+import 'package:ar_flutter_plugin_2/managers/ar_session_manager.dart';
+import 'package:ar_flutter_plugin_2/models/ar_anchor.dart';
+import 'package:ar_flutter_plugin_2/models/ar_hittest_result.dart';
+import 'package:ar_flutter_plugin_2/models/ar_node.dart';
 import 'package:vector_math/vector_math_64.dart';
 
 void main() => runApp(const MyApp());
@@ -19,10 +19,7 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const MaterialApp(
-      debugShowCheckedModeBanner: false,
-      home: ARHome(),
-    );
+    return const MaterialApp(debugShowCheckedModeBanner: false, home: ARHome());
   }
 }
 
@@ -90,27 +87,31 @@ class _ARHomeState extends State<ARHome> {
   Future<void> _handlePlaneTap(List<ARHitTestResult> hits) async {
     if (hits.isEmpty) return;
 
+    // Only consider the closest hit on the plane
     final planeHit = hits.firstWhere(
       (hit) => hit.type == ARHitTestResultType.plane,
       orElse: () => hits.first,
     );
 
+    // Add an anchor to the hit position
     final anchor = ARPlaneAnchor(transformation: planeHit.worldTransform);
     final didAddAnchor = await _anchorManager!.addAnchor(anchor) ?? false;
     if (!didAddAnchor) return;
 
     _anchors.add(anchor);
 
+    // Add a node with Model to the anchor
     final node = ARNode(
-      type: NodeType.webGLB,
-      uri:
-          'https://github.com/KhronosGroup/glTF-Sample-Models/raw/master/2.0/Duck/glTF-Binary/Duck.glb',
+      type: NodeType.localGLTF2,
+      uri: 'assets/models/duck/Duck.gltf',
       scale: Vector3.all(0.2),
       position: Vector3.zero(),
-      rotation: Vector4(0.0, 0.0, 0.0, 1.0),
+      rotation: Vector4(1.0, 0.0, 0.0, 1.0),
     );
 
-    final didAddNode = await _objectManager!.addNode(node, planeAnchor: anchor) ?? false;
+    // Check if adding a node was successful. Otherwise remove the anchor
+    final didAddNode =
+        await _objectManager!.addNode(node, planeAnchor: anchor) ?? false;
     if (!didAddNode) {
       await _anchorManager!.removeAnchor(anchor);
       _anchors.remove(anchor);
