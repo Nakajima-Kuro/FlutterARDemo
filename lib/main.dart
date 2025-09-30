@@ -103,8 +103,7 @@ class _ARHomeState extends State<ARHome> {
     // Add a node with Model to the anchor
     final node = ARNode(
       type: NodeType.localGLTF2,
-      uri: 'assets/models/duck/Duck.gltf',
-      scale: Vector3.all(0.2),
+      uri: 'assets/models/cylinder/cylinder.gltf',
       position: Vector3.zero(),
       rotation: Vector4(1.0, 0.0, 0.0, 1.0),
     );
