@@ -140,20 +140,35 @@ class _ARHomeState extends State<ARHome> {
     double diameterM = 0.2,
     String uri = 'assets/models/cylinder/cylinder.gltf',
   }) async {
-    final a = anchorA.transformation.getTranslation();
-    final b = anchorB.transformation.getTranslation();
-    final seg = b - a;
-    if (seg.length < 0.05) return null; // ignore tiny segments
+    assert(depthM >= 0, 'depthM must be non-negative');
 
-    final aa = axisAngleFromY(seg); // rotate +Y to A→B
-    final mid = (a + b) * 0.5;
+    final aWorld = anchorA.transformation.getTranslation();
+    final bWorld = anchorB.transformation.getTranslation();
+    final segmentWorld = bWorld - aWorld;
+    final segmentLength = segmentWorld.length;
+    final minLength = math.max(depthM, 0.05);
+    if (segmentLength < minLength) return null;
+
+    final midWorld = aWorld + segmentWorld * 0.5;
+    final worldToAnchor = Matrix4.copy(anchorA.transformation)..invert();
+    final localA = worldToAnchor.transformed3(aWorld.clone());
+    final localB = worldToAnchor.transformed3(bWorld.clone());
+    final localMid = worldToAnchor.transformed3(midWorld.clone());
+    final segmentLocal = localB - localA;
+    if (segmentLocal.length2 < 1e-12) return null;
+
+    final directionLocal = segmentLocal.normalized();
+    final rotation = Quaternion.fromTwoVectors(
+      Vector3(0, 1, 0),
+      directionLocal,
+    );
+    final scale = Vector3(diameterM, segmentLocal.length, diameterM);
+    final localTransform = Matrix4.compose(localMid, rotation, scale);
 
     final node = ARNode(
       type: NodeType.localGLTF2,
       uri: uri,
-      position: mid,
-      rotation: aa, // axis-angle rotation
-      scale: Vector3(0.2, 0.2, 0.2), // no scaling
+      transformation: localTransform,
     );
 
     final didAddNode =
@@ -162,18 +177,6 @@ class _ARHomeState extends State<ARHome> {
       return null;
     }
     return node;
-  }
-
-  /// Axis-angle that rotates +Y into `dir` (returns Vector4(ax, ay, az, angle)).
-  Vector4 axisAngleFromY(Vector3 dir) {
-    final y = Vector3(0, 1, 0);
-    final d = dir.normalized();
-    final dot = y.dot(d).clamp(-1.0, 1.0);
-    if (dot > 0.999999) return Vector4(0, 1, 0, 0.0); // no rotation
-    if (dot < -0.999999) return Vector4(1, 0, 0, math.pi); // 180° flip
-    final axis = y.cross(d)..normalize();
-    final angle = math.acos(dot);
-    return Vector4(axis.x, axis.y, axis.z, angle);
   }
 
   // Get Vector3 position from an ARAnchor
