@@ -104,7 +104,14 @@ class _ARHomeState extends State<ARHome> {
         depthM: 0.1,
         uri: 'assets/models/cylinder/cylinder.gltf',
       );
-      if (node != null) _nodes.add(node);
+      if (node != null) {
+        _nodes.add(node);
+      } else {
+        await _anchorManager?.removeAnchor(anchorA);
+        await _anchorManager?.removeAnchor(anchorB);
+        _anchors.remove(anchorA);
+        _anchors.remove(anchorB);
+      }
     }
 
     setState(() {});
@@ -129,52 +136,44 @@ class _ARHomeState extends State<ARHome> {
     required ARObjectManager objectMgr,
     required ARPlaneAnchor anchorA,
     required ARPlaneAnchor anchorB,
-    required double depthM, // push below ground
+    required double depthM,
     double diameterM = 0.2,
-    String uri = 'assets/models/duck/Duck.gltf',
+    String uri = 'assets/models/cylinder/cylinder.gltf',
   }) async {
-    // extract positions from anchors
-    final Vector3 a = anchorA.transformation.getTranslation();
-    final Vector3 b = anchorB.transformation.getTranslation();
-
+    final a = anchorA.transformation.getTranslation();
+    final b = anchorB.transformation.getTranslation();
     final seg = b - a;
-    final len = seg.length;
-    if (len < 0.05) return null; // ignore tiny
+    if (seg.length < 0.05) return null; // ignore tiny segments
 
+    final aa = axisAngleFromY(seg); // rotate +Y to A→B
     final mid = (a + b) * 0.5;
-    final rot = _rotFromY(seg);
 
     final node = ARNode(
       type: NodeType.localGLTF2,
       uri: uri,
-      position: Vector3(mid.x, -depthM, mid.z), // center, pushed down
-      rotation: Vector4(rot.x, rot.y, rot.z, rot.w), // orient along segment
-      scale: Vector3(diameterM, len, diameterM), // scale to length/diameter
+      position: mid,
+      rotation: aa, // axis-angle rotation
+      scale: Vector3(0.2, 0.2, 0.2), // no scaling
     );
 
-    // Check if adding a node was successful. Otherwise remove the anchor and return null
     final didAddNode =
-        await _objectManager!.addNode(node, planeAnchor: anchorA) ?? false;
+        await objectMgr.addNode(node, planeAnchor: anchorA) ?? false;
     if (!didAddNode) {
-      await _anchorManager!.removeAnchor(anchorA);
-      await _anchorManager!.removeAnchor(anchorB);
-      _anchors.remove(anchorA);
-      _anchors.remove(anchorB);
       return null;
     }
     return node;
   }
 
-  // Rotate a Y-up unit cylinder to point along `dir`
-  Quaternion _rotFromY(Vector3 dir) {
+  /// Axis-angle that rotates +Y into `dir` (returns Vector4(ax, ay, az, angle)).
+  Vector4 axisAngleFromY(Vector3 dir) {
     final y = Vector3(0, 1, 0);
     final d = dir.normalized();
     final dot = y.dot(d).clamp(-1.0, 1.0);
-    if (dot > 0.9999) return Quaternion.identity();
-    if (dot < -0.9999) return Quaternion.axisAngle(Vector3(1, 0, 0), math.pi);
+    if (dot > 0.999999) return Vector4(0, 1, 0, 0.0); // no rotation
+    if (dot < -0.999999) return Vector4(1, 0, 0, math.pi); // 180° flip
     final axis = y.cross(d)..normalize();
     final angle = math.acos(dot);
-    return Quaternion.axisAngle(axis, angle);
+    return Vector4(axis.x, axis.y, axis.z, angle);
   }
 
   // Get Vector3 position from an ARAnchor
