@@ -64,6 +64,7 @@ flutter:
   assets:
     - assets/models/duck/
     - assets/models/cylinder/
+    - assets/models/cube/
   
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

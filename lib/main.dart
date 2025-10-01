@@ -3,9 +3,13 @@ import 'ar_imports.dart';
 
 import 'package:vector_math/vector_math_64.dart';
 
-class _pipeModelUri  {
-  static const defaultCylinder = 'assets/models/cylinder/cylinder.gltf';
+class PipeModelUri {
+  //You can add other pipe models here for other colors
+  static const defaultCylinder = 'assets/models/cylinder/default.gltf';
+  static const blueCylinder = 'assets/models/cylinder/blue.gltf';
 }
+
+const _depthGuideModelUri = 'assets/models/cube/cube.gltf';
 
 void main() => runApp(const MyApp());
 
@@ -125,6 +129,7 @@ class _ARHomeState extends State<ARHome> {
         anchorA: anchorA,
         anchorB: anchorB,
         depthM: _defaultPipeDepth,
+        uri: PipeModelUri.blueCylinder,
       );
       if (segment != null) {
         // Track the pipe node and its midpoint anchor so we can clean up later.
@@ -138,6 +143,23 @@ class _ARHomeState extends State<ARHome> {
     setState(() {});
   }
 
+  /// Adds a depth guide consisting of a series of cylinders to the scene,
+  /// hanging from the given anchor and extending to the given depth.
+  ///
+  /// The depth guide is built by first calculating the spacing between each
+  /// guide segment based on the given depth. Then, it builds each segment by
+  /// creating a local transformation matrix that positions the segment at the
+  /// calculated center Y position and scales it to the guide diameter and
+  /// segment length.
+  ///
+  /// Each segment is added to the scene under the given anchor, and the
+  /// resulting nodes are tracked so that they can be cleaned up later.
+  ///
+  /// If the depth is not positive, the function will remove any existing depth
+  /// guide for the given anchor.
+  ///
+  /// The function will return early if the object manager is null, or if
+  /// adding any of the nodes to the scene fails.
   Future<void> _addDepthGuideForAnchor(
     ARPlaneAnchor anchor, {
     required double depthM,
@@ -151,8 +173,8 @@ class _ARHomeState extends State<ARHome> {
 
     _removeDepthGuidesForAnchor(anchor);
 
-    const guideDiameter = 0.02;
-    const segments = 6;
+    const guideDiameter = 0.01;
+    const segments = 1;
     final spacing = depthM / segments;
     final segmentLength = spacing * 0.6;
     final nodes = <ARNode>[];
@@ -166,7 +188,7 @@ class _ARHomeState extends State<ARHome> {
       );
       final node = ARNode(
         type: NodeType.localGLTF2,
-        uri: _pipeModelUri.defaultCylinder,
+        uri: _depthGuideModelUri,
         transformation: localTransform,
       );
 
@@ -197,7 +219,6 @@ class _ARHomeState extends State<ARHome> {
     }
   }
 
-  
   /// Build a pipe between two anchors in world space and add it to the scene.
   ///
   /// The pipe is constructed by first measuring the tap anchors in world space and
@@ -230,7 +251,7 @@ class _ARHomeState extends State<ARHome> {
     required ARPlaneAnchor anchorB,
     required double depthM,
     double diameterM = 0.2,
-    String uri = _pipeModelUri.defaultCylinder,
+    String uri = PipeModelUri.defaultCylinder,
   }) async {
     assert(depthM >= 0, 'depthM must be non-negative');
 
@@ -308,8 +329,7 @@ class _ARHomeState extends State<ARHome> {
     return axisY.normalized();
   }
 
-
-// <=====================Remove Anchors, Nodes and Pipes=====================>
+  // <=====================Remove Anchors, Nodes and Pipes=====================>
   Future<void> _removeEverything() async {
     await _removeNodeList(_nodes);
     await _removeAnchors(_midAnchors);
