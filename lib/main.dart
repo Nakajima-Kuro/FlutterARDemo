@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'ar_imports.dart';
 
-import 'dart:math' as math;
 import 'package:vector_math/vector_math_64.dart';
+
+class _pipeModelUri  {
+  static const defaultCylinder = 'assets/models/cylinder/cylinder.gltf';
+}
 
 void main() => runApp(const MyApp());
 
@@ -22,13 +25,29 @@ class ARHome extends StatefulWidget {
   State<ARHome> createState() => _ARHomeState();
 }
 
+// Bundles the midpoint anchor with its pipe node for easier cleanup.
+class _PipeSegment {
+  const _PipeSegment({required this.anchor, required this.node});
+
+  final ARPlaneAnchor anchor;
+  final ARNode node;
+}
+
 class _ARHomeState extends State<ARHome> {
   ARSessionManager? _sessionManager;
   ARObjectManager? _objectManager;
   ARAnchorManager? _anchorManager;
 
+  static const double _defaultPipeDepth = 1.0;
+
+  // Scene nodes for every pipe segment currently placed.
   final List<ARNode> _nodes = [];
+  // Tap anchors the user drops on the detected plane.
   final List<ARPlaneAnchor> _anchors = [];
+  // Midpoint anchors that keep each pipe steady under the plane.
+  final List<ARPlaneAnchor> _midAnchors = [];
+  // Thin guideline nodes hanging from each tap anchor for depth perception.
+  final Map<String, List<ARNode>> _guideNodes = {};
 
   @override
   void dispose() {
@@ -92,71 +111,167 @@ class _ARHomeState extends State<ARHome> {
 
     _anchors.add(anchor);
 
+    // Add or refresh the depth guide hanging from this anchor.
+    await _addDepthGuideForAnchor(anchor, depthM: _defaultPipeDepth);
+
     // Add a pipe when we have at least two anchors tapped
     if (_anchors.length >= 2) {
       final anchorA = _anchors[_anchors.length - 2];
       final anchorB = _anchors.last;
 
-      final node = await addPipeBetweenAnchors(
+      // Build a pipe between the two most recent tap anchors.
+      final segment = await addPipeBetweenAnchors(
         objectMgr: _objectManager!,
         anchorA: anchorA,
         anchorB: anchorB,
-        depthM: 0.1,
-        uri: 'assets/models/cylinder/cylinder.gltf',
+        depthM: _defaultPipeDepth,
       );
-      if (node != null) {
-        _nodes.add(node);
+      if (segment != null) {
+        // Track the pipe node and its midpoint anchor so we can clean up later.
+        _nodes.add(segment.node);
+        _midAnchors.add(segment.anchor);
       } else {
-        await _anchorManager?.removeAnchor(anchorA);
-        await _anchorManager?.removeAnchor(anchorB);
-        _anchors.remove(anchorA);
-        _anchors.remove(anchorB);
+        await _removeTapAnchors(<ARPlaneAnchor>[anchorA, anchorB]);
       }
     }
 
     setState(() {});
   }
 
-  Future<void> _removeEverything() async {
-    for (final node in List<ARNode>.from(_nodes)) {
-      await _objectManager!.removeNode(node);
-      _nodes.remove(node);
+  Future<void> _addDepthGuideForAnchor(
+    ARPlaneAnchor anchor, {
+    required double depthM,
+  }) async {
+    final objectMgr = _objectManager;
+    if (objectMgr == null) return;
+    if (depthM <= 0) {
+      _removeDepthGuidesForAnchor(anchor);
+      return;
     }
 
-    for (final anchor in List<ARPlaneAnchor>.from(_anchors)) {
-      await _anchorManager!.removeAnchor(anchor);
-      _anchors.remove(anchor);
+    _removeDepthGuidesForAnchor(anchor);
+
+    const guideDiameter = 0.02;
+    const segments = 6;
+    final spacing = depthM / segments;
+    final segmentLength = spacing * 0.6;
+    final nodes = <ARNode>[];
+
+    for (var i = 0; i < segments; i++) {
+      final centerY = -spacing * (i + 0.5);
+      final localTransform = Matrix4.compose(
+        Vector3(0, centerY, 0),
+        Quaternion(0, 0, 0, 1),
+        Vector3(guideDiameter, segmentLength, guideDiameter),
+      );
+      final node = ARNode(
+        type: NodeType.localGLTF2,
+        uri: _pipeModelUri.defaultCylinder,
+        transformation: localTransform,
+      );
+
+      if (await objectMgr.addNode(node, planeAnchor: anchor) != true) {
+        for (final added in nodes) {
+          objectMgr.removeNode(added);
+        }
+        return;
+      }
+      nodes.add(node);
     }
 
-    setState(() {});
+    if (nodes.isNotEmpty) {
+      _guideNodes[anchor.name] = nodes;
+    }
   }
 
-  // add pipe directly between two anchors
-  Future<ARNode?> addPipeBetweenAnchors({
+  void _removeDepthGuidesForAnchor(ARPlaneAnchor anchor) {
+    _removeDepthGuidesByName(anchor.name);
+  }
+
+  void _removeDepthGuidesByName(String anchorName) {
+    final nodes = _guideNodes.remove(anchorName);
+    if (nodes == null) return;
+    final objectMgr = _objectManager;
+    for (final node in nodes) {
+      objectMgr?.removeNode(node);
+    }
+  }
+
+  
+  /// Build a pipe between two anchors in world space and add it to the scene.
+  ///
+  /// The pipe is constructed by first measuring the tap anchors in world space and
+  /// sinking them by [depthM]. Then, it creates a midpoint anchor by reusing
+  /// [anchorA]'s orientation at the segment's center, and uses this midpoint
+  /// anchor to convert both tap positions into the midpoint anchor's local space.
+  ///
+  /// The pipe is then built using the computed local transform, and added to the scene
+  /// under the midpoint anchor.
+  ///
+  /// If the adjusted segment collapses to avoid zero-length pipes, the function
+  /// returns null.
+  ///
+  /// [objectMgr] is the object manager responsible for adding the pipe node to the scene.
+  ///
+  /// [anchorA] and [anchorB] are the two anchors in world space which define the endpoints
+  /// of the pipe.
+  ///
+  /// [depthM] is the depth of the pipe in meters.
+  ///
+  /// [diameterM] is the diameter of the pipe in meters. Defaults to 0.2.
+  ///
+  /// [uri] is the uri of the pipe model. Defaults to [_pipeModelUri.defaultCylinder].
+  ///
+  /// Returns a [_PipeSegment] object which contains the midpoint anchor and the pipe node if
+  /// successful, or null if the function fails.
+  Future<_PipeSegment?> addPipeBetweenAnchors({
     required ARObjectManager objectMgr,
     required ARPlaneAnchor anchorA,
     required ARPlaneAnchor anchorB,
     required double depthM,
     double diameterM = 0.2,
-    String uri = 'assets/models/cylinder/cylinder.gltf',
+    String uri = _pipeModelUri.defaultCylinder,
   }) async {
     assert(depthM >= 0, 'depthM must be non-negative');
 
+    final anchorMgr = _anchorManager;
+    if (anchorMgr == null) return null;
+
+    // Measure the tap anchors in world space and sink them by depthM.
     final aWorld = anchorA.transformation.getTranslation();
     final bWorld = anchorB.transformation.getTranslation();
-    final segmentWorld = bWorld - aWorld;
-    final segmentLength = segmentWorld.length;
-    final minLength = math.max(depthM, 0.05);
-    if (segmentLength < minLength) return null;
+    final depthOffset = _planeNormal(anchorA.transformation) * depthM;
+    final adjustedAWorld = aWorld - depthOffset;
+    final adjustedBWorld = bWorld - depthOffset;
+    final segmentWorld = adjustedBWorld - adjustedAWorld;
+    final segmentLengthWorld = segmentWorld.length;
+    const minLength = 0.05;
+    if (segmentLengthWorld < minLength) return null;
 
-    final midWorld = aWorld + segmentWorld * 0.5;
-    final worldToAnchor = Matrix4.copy(anchorA.transformation)..invert();
-    final localA = worldToAnchor.transformed3(aWorld.clone());
-    final localB = worldToAnchor.transformed3(bWorld.clone());
-    final localMid = worldToAnchor.transformed3(midWorld.clone());
+    // Create a midpoint anchor by reusing anchorA's orientation at the segment's center.
+    final midWorld = (adjustedAWorld + adjustedBWorld) * 0.5;
+    final midTransform = Matrix4.copy(anchorA.transformation)
+      ..setTranslation(midWorld);
+
+    final midAnchor = ARPlaneAnchor(transformation: midTransform);
+    if (await anchorMgr.addAnchor(midAnchor) != true) {
+      return null;
+    }
+
+    // Convert both tap positions into the midpoint anchor's local space.
+    final worldToMid = Matrix4.copy(midTransform)..invert();
+    final localA = worldToMid.transformed3(adjustedAWorld.clone());
+    final localB = worldToMid.transformed3(adjustedBWorld.clone());
+
     final segmentLocal = localB - localA;
-    if (segmentLocal.length2 < 1e-12) return null;
+    // Abort if the adjusted segment collapses to avoid zero-length pipes.
+    if (segmentLocal.length2 < 1e-12) {
+      await anchorMgr.removeAnchor(midAnchor);
+      return null;
+    }
 
+    // Build the pipe transform so the cylinder spans between the two endpoints.
+    final localMid = (localA + localB) * 0.5;
     final directionLocal = segmentLocal.normalized();
     final rotation = Quaternion.fromTwoVectors(
       Vector3(0, 1, 0),
@@ -165,22 +280,68 @@ class _ARHomeState extends State<ARHome> {
     final scale = Vector3(diameterM, segmentLocal.length, diameterM);
     final localTransform = Matrix4.compose(localMid, rotation, scale);
 
+    // Create the pipe node using the computed local transform.
     final node = ARNode(
       type: NodeType.localGLTF2,
       uri: uri,
       transformation: localTransform,
     );
 
-    final didAddNode =
-        await objectMgr.addNode(node, planeAnchor: anchorA) ?? false;
-    if (!didAddNode) {
+    if (await objectMgr.addNode(node, planeAnchor: midAnchor) != true) {
+      await anchorMgr.removeAnchor(midAnchor);
       return null;
     }
-    return node;
+
+    return _PipeSegment(anchor: midAnchor, node: node);
   }
 
-  // Get Vector3 position from an ARAnchor
-  Vector3 anchorToVector3(ARAnchor anchor) {
-    return anchor.transformation.getTranslation(); // Float32List of length 16
+  // Extract the plane normal (Y axis) from an anchor transform.
+  Vector3 _planeNormal(Matrix4 transform) {
+    final axisY = Vector3(
+      transform.entry(0, 1),
+      transform.entry(1, 1),
+      transform.entry(2, 1),
+    );
+    if (axisY.length2 == 0) {
+      return Vector3(0, 1, 0);
+    }
+    return axisY.normalized();
+  }
+
+
+// <=====================Remove Anchors, Nodes and Pipes=====================>
+  Future<void> _removeEverything() async {
+    await _removeNodeList(_nodes);
+    await _removeAnchors(_midAnchors);
+    await _removeTapAnchors(List<ARPlaneAnchor>.from(_anchors));
+    setState(() {});
+  }
+
+  Future<void> _removeNodeList(List<ARNode> nodes) async {
+    final objectMgr = _objectManager;
+    if (objectMgr == null) return;
+    for (final node in List<ARNode>.from(nodes)) {
+      await objectMgr.removeNode(node);
+      nodes.remove(node);
+    }
+  }
+
+  Future<void> _removeAnchors(List<ARPlaneAnchor> anchors) async {
+    final anchorMgr = _anchorManager;
+    if (anchorMgr == null) return;
+    for (final anchor in List<ARPlaneAnchor>.from(anchors)) {
+      await anchorMgr.removeAnchor(anchor);
+      anchors.remove(anchor);
+    }
+  }
+
+  Future<void> _removeTapAnchors(Iterable<ARPlaneAnchor> anchors) async {
+    final anchorMgr = _anchorManager;
+    if (anchorMgr == null) return;
+    for (final anchor in anchors) {
+      _removeDepthGuidesForAnchor(anchor);
+      await anchorMgr.removeAnchor(anchor);
+      _anchors.remove(anchor);
+    }
   }
 }
